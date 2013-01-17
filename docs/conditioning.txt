@@ -1,0 +1,14 @@
+P(coal in slice k| no coal before) = C*S*exp(tQ)*D
+C,D are row and column extraction matrices.
+S is the scrambling matrix
+
+P(coal in slice k and not before) = P(coal in slice k| no coal before)*P(no coal before) + P(coal in slice k| coal before)*P(coal before)
+                   = P(coal in slice k| no coal before)*P(no coal before) + 0
+=> P(coal in slice k | no coal before) = P(coal in slice k and not before)/P(no coal before)
+
+Given a list of P(coal in slice k and not before), say r, of length 'n'
+we can get the conditional as follows 
+cs = r.cumsum()
+r[1:] = r[1:]/cs[:-1]
+
+

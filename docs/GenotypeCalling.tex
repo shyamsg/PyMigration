@@ -1,0 +1,52 @@
+% !TEX TS-program = latex
+\documentclass[12pt]{article}
+\usepackage{amsmath}
+
+\begin{document}
+\flushleft
+\textbf{Genotyping equations}\\
+The genotype calling can be split into 2 parts:\\
+\begin{enumerate}
+\item The likelihood of the reads distributed at the position of interest - the likelihood is obtained from preexisting software like samtools
+\item The prior for all the genotypes - This is where we implement a population genetics based prior.
+\end{enumerate}
+
+\textbf{Population Genetics based genotype priors}\\
+Pop-gen based genotype priors can be modeled hierarchically, in three parts as follows:
+\begin{enumerate}
+\item Probability that the site is a variant site or not - $P(var|\theta) := P(\textrm{site is variable})$
+\item Given that the site is a variant site, the frequency of the variant can be obtained using the neutral frequency spectrum expectation - frequency of the non-reference (alternate) allele $:= p_a  \sim SFS_{neutral}$
+\item Given the frequency of the alternate allele, $p_a$, we compute the probability of the the genotypes using HWE,i.e. $P(G = (a,b)) = 2^{I(a!=b)}p_ap_b$.
+
+\end{enumerate}
+\textbf{Genotype calling}\\
+Let $C_i = (C_a, C_c, C_g, C_t)$ be the vector of base counts at current position for individual $i$, and let $P(C_i | G=g)$ be the likelihood of genotype $g$ computed using samtools. $P(G=g|C_i)$, the posterior probability can be computed using the priors mentioned in the previous section.\\
+\begin{eqnarray}
+P(G=g|C_i) &\propto& P(C_i|G=g)P(G = g) \nonumber \\
+		  &\propto& P(C_i|G=g)P(var|\theta)P(p_v|var)P(G=g|p_v)
+\label{eqn:post}
+\end{eqnarray}
+Here, $f(\theta)$ can be calculated using the expected SFS. Given $n$ diploid samples and a population scaled mutation rate of $\theta$, we can compute the total expected number of variant sites to be $E(S) = l\theta\sum_{k=1}^{2n-1}1/k$. So, $P(var|\theta)= (l-E(S))/l = 1 - \theta\sum_{k=1}^{2n-1}1/k$, where $l$ is the total length of the region. \\
+Similarly, we can use the neutral SFS to compute the frequency of the variant in the population, $P(p_v = 1/m | var) = (1/m)/(\sum_{k=1}^{2n-1}1/k), \forall m \in {1,2 \dots 2n-1}$.\\
+Algorithm for computing the posterior of the genotypes:
+\begin{itemize}
+\item Select an initial value for $\theta$
+\item Compute the probability of being variant as $P(var|\theta)$
+\item Sample an allele frequency for the alternate allele, $p_a$, for the variant from the neutral SFS
+\item Assign this allele frequency to the reference or alternate allele randomly, setting the other allele frequency to be $1-p_a$
+\item Using the allele frequencies, compute the prior genotype probabilities using HWE.
+\item Compute the posterior using the genotype priors and the likelihood. 
+\end{itemize}
+
+\newpage
+Prior probabilities:\\
+\begin{equation}
+P(G_i = (g_1,g_2)|\theta) = P(G_i=(g_1,g_2)|v_i=0)P(v_i=0) + P(G_i=(g_1,g_2)|v_i=1)P(v_i=1)
+\label{eqn:prior}
+\end{equation}
+where $v_i$ is an indicator variable for site $i$, which is 1 if the site is variable and 0 otherwise.\\
+Consider a single location $i$. If the site $i$ is not variable, i.e. $v_i = 0$, the only possible genotype can be the reference homozygote. If the site is variable, i.e. $v_i=1$, we need to consider the possible alleles at the site. In this work, we limit our analysis to the case where a site is biallelic. To simplify further, we impose the additional constraint that one allele at the site must be the reference allele. Under these assumptions, we can write the second term of \ref{eqn:prior} as
+\begin{equation}
+P(G_i =(g_1,g_2)|v_i=1)P(v_i=1) = \sum_{a\in \{ACGT\}-r}
+\end{equation}
+\end{document}
