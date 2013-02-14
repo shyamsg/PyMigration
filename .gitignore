@@ -9,3 +9,11 @@
 *.exe
 *.out
 *.app
+
+# latex intermediates
+*.aux
+*.dvi
+*.toc
+*.log
+*.ps
+*.bbl

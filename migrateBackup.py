@@ -821,6 +821,261 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
     return (xopts, pdlist)
 
 
+def compute_Frob_norm_mig_fixZero(x, zinds, t, obs_coal_rates, P0, popdict):
+    """Function to compute the order 2 norm distance between the 
+    observed coalescent intensities and coalescent intensities 
+    computed using the given N and m
+    The input is given as x - a vector with N and m values
+    P0 is the initial scrambling matrix. Note that we work with 1/N and
+    m values, as preconditioning to make the problem more spherical.
+    """
+    k = int((np.sqrt(1 + 8 * (len(x) + len(zinds))) - 1) / 2.0)
+    Ne_inv = x[0:k]
+    ms = x[k:]
+    m = np.zeros((k, k))
+    cnt = 0
+    if len(zinds) + len(ms) != k * (k - 1) / 2:
+        print 'Number of demes is', k, '.'
+        print 'Migration vector has', len(ms), 'elements.'
+        print 'Zero index vector has', len(zinds), 'elements.'
+        raise Exception('Length of migration and zero index vector is incorrect.')
+    for i in xrange(k):
+        for j in xrange(i + 1, k):
+            if (2 * k - i + 1) * i / 2 + (j - i) in zinds:
+                m[i, j] = m[j, i] = 0.0
+            else:
+                m[i, j] = m[j, i] = ms[cnt]
+                cnt += 1
+
+    Q = comp_pw_coal_cont(m, Ne_inv)
+    try:
+        Pcurr = np.abs(np.round(expM(t * Q), 16))
+    except ValueError as v:
+        print 'IN FUNC CFNM'
+        print m
+        print Ne
+        print 'OUT FUNC CFNM'
+        raise v
+
+    dims = np.shape(P0)
+    Ck = np.matrix(np.eye(dims[0]))[0:dims[0] - 1, :]
+    Dk = np.matrix(np.eye(dims[1]))[dims[1] - 1, :]
+    Pcurr = Ck * P0 * Pcurr * Dk.T
+    if np.shape(obs_coal_rates) != np.shape(Pcurr):
+        print 'Dimensions: Observed -> ' + str(np.shape(obs_coal_rates)) + ' and Computed -> ' + str(np.shape(Pcurr))
+        raise Exception('Dimensions of observed and computed vectors do not match.')
+    try:
+        tempo = linalg.norm(np.log(average_coal_rates(obs_coal_rates, popdict) + 1e-200) - np.log(average_coal_rates(Pcurr, popdict) + 1e-200), 2) ** 2
+    except:
+#        print 'obsRates', obs_coal_rates
+#        print 'average', average_coal_rates(obs_coal_rates, popdict)
+#        print 'curr', Pcurr
+#        print 'Q', Q
+#        print 'P', expM(t * Q)
+#        print 'P0', P0
+        print 'Error in tempo 1'
+        sys.exit(1)
+
+    return tempo
+
+
+def mod_zinds(zinds, pdslice):
+    """This function takes the zero index vector and
+    modifies it according to the pdslice popmerger
+    dictionary
+    """
+    if len(pdslice) == 0:
+        return zinds
+    numdemes = 0
+    for j in pdslice:
+        numdemes = numdemes + len(j)
+
+    colnums = pop_to_col(pdslice, numdemes)
+    newzinds = []
+    for i in zinds:
+        for j in range(len(colnums)):
+            if i in colnums[j] and j not in newzinds:
+                newzinds.append(j)
+
+    return newzinds
+
+
+def grad_Frob_cdiff(x, t, obs_coal_rates, P0, popdict, epsilon = 1e-12):
+    """This function calculates the gradient of the function.
+    """
+    k = int((np.sqrt(1 + 8 * len(x)) - 1) / 2.0)
+    grad = np.zeros(k * (k + 1) / 2)
+    dims = np.shape(P0)
+    Ck = np.matrix(np.eye(dims[0]))[0:dims[0] - 1, :]
+    Dk = np.matrix(np.eye(dims[1]))[dims[1] - 1, :]
+    for var in range(len(grad)):
+        localx = x.copy()
+        localx[var] = localx[var] + epsilon
+        Ninv = localx[0:k].copy()
+        ms = localx[k:].copy()
+        m = np.zeros((k, k))
+        cnt = 0
+        for i in xrange(k):
+            for j in xrange(i + 1, k):
+                m[i, j] = m[j, i] = ms[cnt]
+                cnt += 1
+
+        Q1 = comp_pw_coal_cont(m, Ninv)
+        localx[var] = localx[var] - 2 * epsilon
+        Ninv = localx[0:k].copy()
+        ms = localx[k:].copy()
+        m = np.zeros((k, k))
+        cnt = 0
+        for i in xrange(k):
+            for j in xrange(i + 1, k):
+                m[i, j] = m[j, i] = ms[cnt]
+                cnt += 1
+
+        Q2 = comp_pw_coal_cont(m, Ninv)
+        try:
+            Pcurr1 = np.abs(np.round(expM(t * Q1), 16))
+            Pcurr2 = np.abs(np.round(expM(t * Q2), 16))
+        except ValueError as v:
+            ist = raw_input('Value error raised, press any button to abort')
+            raise v
+
+        Pcurr1 = Ck * P0 * Pcurr1 * Dk.T
+        Pcurr2 = Ck * P0 * Pcurr2 * Dk.T
+        if np.shape(obs_coal_rates) != np.shape(Pcurr1):
+            print 'Dimensions: Observed -> ' + str(np.shape(obs_coal_rates)) + ' and Computed -> ' + str(np.shape(Pcurr1))
+            raise Exception('Dimensions of observed and computed vectors do not match.')
+        try:
+            new_value1 = linalg.norm(np.log(average_coal_rates(obs_coal_rates, popdict) + 1e-200) - np.log(average_coal_rates(Pcurr1, popdict) + 1e-200), 2) ** 2
+            new_value2 = linalg.norm(np.log(average_coal_rates(obs_coal_rates, popdict) + 1e-200) - np.log(average_coal_rates(Pcurr2, popdict) + 1e-200), 2) ** 2
+            grad[var] = (new_value1 - new_value2) / (2 * epsilon)
+        except Exception as e:
+            print 'Err:', e.message
+
+    return grad
+
+
+def comp_N_m_tnc(obs_rates, t, merge_threshold, useMigration):
+    """This function estimates the N and m parameters for the various time slices. The 
+    time slices are given in a vector form 't'. t specifies the length of the time slice, not
+    the time from present to end of time slice (not cumulative but atomic)
+    Also, the obs_rates are given, for each time slice are given in columns of the obs_rates
+    matrix. Both obs_rates and time slice lengths are given from present to past.
+    """
+    FTOL = 10.0
+    PTOL = 1e-20
+    EPSILON = 1e-11
+    RESTARTS = 3
+    FLIMIT = 1e-20
+    numslices = len(t)
+    nr = np.shape(obs_rates)[0] + 1
+    numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
+    print 'Starting iterations'
+    P0 = np.matrix(np.eye(nr))
+    xopts = []
+    pdlist = []
+    for i in xrange(numslices):
+        bestxopt = None
+        bestfval = 1e+200
+        print 'Running for slice ', i
+        reestimate = True
+        while reestimate:
+            pdslice = make_merged_pd(pdlist)
+            print 'pdslice:', pdslice
+            N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+            m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
+            x0 = np.hstack((N0_inv, m0))
+            lims = [(1e-10, 0.01)] * numdemes
+            lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
+            try:
+                xopt = opt.fmin_cobyla(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+                 obs_rates[:, i],
+                 P0,
+                 make_merged_pd(pdlist)), approx_grad=True, maxfun=10000, pgtol=PTOL, xtol=PTOL, ftol=PTOL)
+                fun = compute_Frob_norm_mig(xopt, t[i], obs_rates[:, i], P0, make_merged_pd(pdlist))
+                if fun < bestfval:
+                    bestfval = fun
+                    bestxopt = xopt
+            except Exception as e:
+                print 'Error:', e.message
+
+            N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+            m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+            x0 = np.hstack((N0_inv, m0))
+            nrestarts = 0
+            try:
+                xopt, nf, rc = opt.fmin_tnc(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+                 obs_rates[:, i],
+                 P0,
+                 make_merged_pd(pdlist)), approx_grad=True, maxfun=10000, pgtol=PTOL, xtol=PTOL, ftol=PTOL)
+                fun = compute_Frob_norm_mig(xopt, t[i], obs_rates[:, i], P0, make_merged_pd(pdlist))
+                if fun < bestfval:
+                    bestxopt = xopt
+                    bestfval = fun
+            except Exception as e:
+                print 'Error:', e.message
+
+            print nrestarts
+            while nrestarts < RESTARTS and bestfval > FLIMIT:
+                N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+                m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+                x0 = np.hstack((N0_inv, m0))
+                try:
+                    xopt, nf, rc = opt.fmin_tnc(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+                     obs_rates[:, i],
+                     P0,
+                     make_merged_pd(pdlist)), approx_grad=True, maxfun=10000, pgtol=PTOL, xtol=PTOL, ftol=PTOL)
+                    fun = compute_Frob_norm_mig(xopt, t[i], obs_rates[:, i], P0, make_merged_pd(pdlist))
+                    if fun < bestfval:
+                        bestfval = fun
+                        bestxopt = xopt
+                except ValueError as e:
+                    print 'Error:', e.message
+
+                print nrestarts
+                nrestarts += 1
+
+            print bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
+            Ne_inv = bestxopt[0:numdemes]
+            mtemp = bestxopt[numdemes:]
+            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration)
+            reestimate = False
+            if len(popdict) < numdemes:
+                print 'Merging populations and reestimating parameters:', popdict
+                print bestxopt
+                P0 = converge_pops(popdict, P0)
+                reestimate = True
+                pdlist.append(popdict)
+                numdemes = len(popdict)
+                nr = numdemes * (numdemes + 1) / 2 + 1
+                lims[:] = []
+                bestfval = 1e+200
+                bestxopt = None
+            else:
+                modXopt = [ 1.0 / x for x in bestxopt[0:numdemes] ]
+                cnt = 0
+                for ii in xrange(numdemes):
+                    for jj in xrange(ii + 1, numdemes):
+                        modXopt.append(bestxopt[numdemes + cnt])
+                        cnt = cnt + 1
+
+                xopts.append(np.array(modXopt))
+                Ne_inv = bestxopt[0:numdemes]
+                mtemp = bestxopt[numdemes:]
+
+        m = np.zeros((numdemes, numdemes))
+        cnt = 0
+        for ii in xrange(numdemes):
+            for jj in xrange(ii + 1, numdemes):
+                m[ii, jj] = m[jj, ii] = mtemp[cnt]
+                cnt += 1
+
+        Q = comp_pw_coal_cont(m, Ne_inv)
+        P = expM(t[i] * Q)
+        print np.real(P0 * P)[0:-1, -1]
+        print np.real(obs_rates[:, i])
+
+    return (xopts, pdlist)
+
 
 def initStartingPoint(obs_rates, nd, t, merged_pd, P0):
     """Choose an initial starting point using a pairwise
@@ -841,6 +1096,267 @@ def mp2np(mat):
             nmat[r, c] = mat[r, c]
 
     return nmat
+
+
+def compute_Frob_norm_mig_subset(x, t, obs_coal_rates, P0, popdict, indicesOfInt, npops, allParms):
+    """Function to compute the order 2 norm distance between the 
+    observed coalescent intensities and coalescent intensities 
+    computed using the given N and m
+    The input is given as x - a vector with N and m values
+    P0 is the initial scrambling matrix. Note that we work with 1/N and
+    m values, as preconditioning to make the problem more spherical.
+    """
+    ktot = int((np.sqrt(1 + 8 * len(allParms)) - 1) / 2.0)
+    k = npops
+    cntInt = 0
+    cntNotInt = 0
+    Ne_inv = []
+    for i in xrange(ktot):
+        if i in indicesOfInt:
+            Ne_inv.append(x[cntInt])
+            cntInt += 1
+        else:
+            Ne_inv.append(allParms[cntNotInt])
+        cntNotInt += 1
+
+    ms = []
+    for ll in xrange(ktot, ktot * (ktot + 1) / 2):
+        if ll in indicesOfInt:
+            ms.append(x[cntInt])
+            cntInt += 1
+        else:
+            ms.append(allParms[cntNotInt])
+        cntNotInt += 1
+
+    m = np.zeros((ktot, ktot))
+    cnt = 0
+    for i in xrange(ktot):
+        for j in xrange(i + 1, ktot):
+            m[i, j] = m[j, i] = ms[cnt]
+            cnt += 1
+
+    Q = comp_pw_coal_cont(m, Ne_inv)
+    try:
+        Pcurr = np.abs(np.round(expM(t * Q), 12))
+    except ValueError as v:
+        print 'IN FUNC CFNM'
+        print m
+        print Ne
+        print 'OUT FUNC CFNM'
+        raise v
+
+    dims = np.shape(P0)
+    Ck = np.matrix(np.eye(dims[0]))[0:dims[0] - 1, :]
+    Dk = np.matrix(np.eye(dims[1]))[dims[1] - 1, :]
+    Pcurr = Ck * P0 * Pcurr * Dk.T
+    if np.shape(obs_coal_rates) != np.shape(Pcurr):
+        print 'Dimensions: Observed -> ' + str(np.shape(obs_coal_rates)) + ' and Computed -> ' + str(np.shape(Pcurr))
+        raise Exception('Dimensions of observed and computed vectors do not match.')
+    try:
+        tempo = linalg.norm(average_coal_rates(obs_coal_rates, popdict) - average_coal_rates(Pcurr, popdict), 2) ** 2
+    except:
+#        print 'obsRates', obs_coal_rates
+#        print 'average', average_coal_rates(obs_coal_rates, popdict)
+#        print 'curr', Pcurr
+#        print 'Q', Q
+#        print 'P', expM(t * Q)
+#        print 'P0', P0
+        print 'Error in tempo 2'
+        raise 
+
+    return tempo
+
+
+def comp_N_m_bfgs_subset(obs_rates, t, merge_threshold, subsize, useMigration, initialize = False):
+    """This function estimates the N and m parameters for the various time slices. The 
+    time slices are given in a vector form 't'. t specifies the length of the time slice, not
+    the time from present to end of time slice (not cumulative but atomic)
+    Also, the obs_rates are given, for each time slice are given in columns of the obs_rates
+    matrix. Both obs_rates and time slice lengths are given from present to past.
+    """
+    FTOL = 10.0
+    PTOL = 1e-20
+    EPSILON = 1e-11
+    EPS_FUN = 1e-14
+    RESTARTS = 20
+    CHECKVAL = 5
+    COARSEFVAL = 1e-05
+    FLIMIT = 1e-12
+    numslices = len(t)
+    nr = np.shape(obs_rates)[0] + 1
+    numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
+    print 'Starting iterations'
+    P0 = np.matrix(np.eye(nr))
+    xopts = []
+    pdlist = []
+    for i in xrange(numslices):
+        print 'Running for slice ', i
+        if subsize > numdemes:
+            subsize = numdemes
+        reestimate = True
+        while reestimate:
+            pdslice = make_merged_pd(pdlist)
+            print 'pdslice:', pdslice
+            if initialize:
+                allParms = initStartingPoint(obs_rates[:, i], t[i], make_merged_pd(pdslice), P0)
+            else:
+                N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+                m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
+                allParms = np.hstack((N0_inv, m0))
+            oldFun = 1e+200
+            epsdiff = 10000000000.0
+            lims = [(1e-15, 0.1)] * subsize
+            lims += [(1e-15, 0.1)] * (subsize * (subsize - 1) / 2)
+            cond = True
+            cond2 = True
+            while cond:
+                sets = it.combinations(range(numdemes), subsize)
+                while cond2:
+                    try:
+                        popSet = sets.next()
+                        indicesOfInt = popIndices(popSet, numdemes)
+                        print popSet, indicesOfInt, oldFun, epsdiff
+                        x0 = allParms[indicesOfInt]
+                        xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig_subset, x0, bounds=lims, args=(t[i],
+                         obs_rates[:, i],
+                         P0,
+                         make_merged_pd(pdlist),
+                         indicesOfInt,
+                         subsize,
+                         allParms), approx_grad=True, maxfun=100000, factr=FTOL, epsilon=EPSILON, iprint=-1)
+                        allParms[indicesOfInt] = xopt
+                        print 'Dictionary:', dic['warnflag'], dic['funcalls']
+                    except StopIteration as s:
+                        print 'One loop  over'
+                        cond2 = False
+                    except Exception as e:
+                        print 'Error:', e.message
+
+                epsdiff = oldFun - fun
+                oldFun = fun
+                cond = epsdiff > EPS_FUN and subsize < numdemes
+
+            bestfval = fun
+            bestxopt = allParms
+            N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+            m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+            allParms = np.hstack((N0_inv, m0))
+            nrestarts = 0
+            epsdiff = 10000000000.0
+            oldFun = 1e+200
+            cond = True
+            cond2 = True
+            while cond:
+                sets = it.combinations(range(numdemes), subsize)
+                while cond2:
+                    try:
+                        popSet = sets.next()
+                        indicesOfInt = popIndices(popSet, numdemes)
+                        x0 = allParms[indicesOfInt]
+                        xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig_subset, x0, bounds=lims, args=(t[i],
+                         obs_rates[:, i],
+                         P0,
+                         make_merged_pd(pdlist),
+                         indicesOfInt,
+                         subsize,
+                         allParms), approx_grad=True, maxfun=100000, factr=FTOL, epsilon=EPSILON, iprint=-1)
+                        allParms[indicesOfInt] = xopt
+                        print 'Dictionary:', dic['warnflag'], dic['funcalls']
+                    except StopIteration as s:
+                        print 'One loop over'
+                        cond2 = False
+                    except Exception as e:
+                        print 'Error:', e.message
+                        print nrestarts
+
+                epsdiff = oldFun - fun
+                oldFun = fun
+                cond = epsdiff > EPS_FUN and subsize < numdemes
+
+            if fun < bestfval:
+                bestxopt = allParms
+                bestfval = fun
+            while nrestarts < RESTARTS and bestfval > FLIMIT:
+                N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+                m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+                allParms = np.hstack((N0_inv, m0))
+                cond = True
+                cond2 = True
+                epsdiff = 10000000000.0
+                oldFun = 1e+200
+                while cond:
+                    sets = it.combinations(range(numdemes), subsize)
+                    while cond2:
+                        try:
+                            popSet = sets.next()
+                            indicesOfInt = popIndices(popSet, numdemes)
+                            x0 = allParms[indicesOfInt]
+                            xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig_subset, x0, bounds=lims, args=(t[i],
+                             obs_rates[:, i],
+                             P0,
+                             make_merged_pd(pdlist),
+                             indicesOfInt,
+                             subsize,
+                             allParms), approx_grad=True, maxfun=100000, factr=FTOL, epsilon=EPSILON, iprint=-1)
+                            allParms[indicesOfInt] = xopt
+                            print 'Dictionary:', dic['warnflag'], dic['funcalls']
+                        except StopIteration as s:
+                            print 'One loop over'
+                            cond2 = False
+                        except Exception as e:
+                            print 'Error:', e.message
+
+                    epsdiff = oldFun - fun
+                    oldFun = fun
+                    cond = epsdiff > EPS_FUN and subsize < numdemes
+
+                if fun < bestfval:
+                    bestxopt = allParms
+                    bestfval = fun
+                print nrestarts, bestfval, fun
+                nrestarts += 1
+
+            print bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
+            Ne_inv = bestxopt[0:numdemes]
+            mtemp = bestxopt[numdemes:]
+            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration)
+            reestimate = False
+            if len(popdict) < numdemes:
+                print 'Merging populations and reestimating parameters:', popdict
+                print bestxopt
+                P0 = converge_pops(popdict, P0)
+                reestimate = True
+                pdlist.append(popdict)
+                numdemes = len(popdict)
+                nr = numdemes * (numdemes + 1) / 2 + 1
+                lims[:] = []
+                bestfval = 1e+200
+                bestxopt = None
+            else:
+                modXopt = [ 1.0 / x for x in bestxopt[0:numdemes] ]
+                cnt = 0
+                for ii in xrange(numdemes):
+                    for jj in xrange(ii + 1, numdemes):
+                        modXopt.append(bestxopt[numdemes + cnt])
+                        cnt = cnt + 1
+
+                xopts.append(np.array(modXopt))
+                Ne_inv = bestxopt[0:numdemes]
+                mtemp = bestxopt[numdemes:]
+
+        m = np.zeros((numdemes, numdemes))
+        cnt = 0
+        for ii in xrange(numdemes):
+            for jj in xrange(ii + 1, numdemes):
+                m[ii, jj] = m[jj, ii] = mtemp[cnt]
+                cnt += 1
+
+        Q = comp_pw_coal_cont(m, Ne_inv)
+        P = expM(t[i] * Q)
+        P0 = P0 * conv_scrambling_matrix(P)
+
+    return (xopts, pdlist)
+
 
 def popIndices(pops, numPops):
     """La la landis
