@@ -1,6 +1,9 @@
 # Emacs backups 
 *~
 
+#pyc files
+*pyc
+
 # Libraries
 *.lib
 *.a
