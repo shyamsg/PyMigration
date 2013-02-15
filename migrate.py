@@ -403,6 +403,21 @@ def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose
             reestimate = False
             if len(popdict) < numdemes:
                 print 'Merging populations and reestimating parameters:', popdict
+                Ne_inv = bestxopt[0:numdemes]
+                mtemp = bestxopt[numdemes:]
+                m = np.zeros((numdemes, numdemes))
+                cnt = 0
+                for ii in xrange(numdemes):
+                    for jj in xrange(ii + 1, numdemes):
+                        m[ii, jj] = m[jj, ii] = mtemp[cnt]
+                        cnt += 1
+
+                Qtemp = comp_pw_coal_cont(m, Ne_inv)
+                Ptemp = expM(t[i] * Qtemp)
+                if verbose:
+                    print np.real(P0 * Ptemp)[0:-1, -1]
+                    print np.real(obs_rates[:, i])
+                    ist = raw_input('What the duece?')
                 print bestxopt
                 P0 = converge_pops(popdict, P0)
                 reestimate = True
@@ -733,6 +748,21 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
             reestimate = False
             if len(popdict) < numdemes:
                 print 'Merging populations and reestimating parameters:', popdict
+                Ne_inv = bestxopt[0:numdemes]
+                mtemp = bestxopt[numdemes:]
+                m = np.zeros((numdemes, numdemes))
+                cnt = 0
+                for ii in xrange(numdemes):
+                    for jj in xrange(ii + 1, numdemes):
+                        m[ii, jj] = m[jj, ii] = mtemp[cnt]
+                        cnt += 1
+
+                Qtemp = comp_pw_coal_cont(m, Ne_inv)
+                Ptemp = expM(t[i] * Qtemp)
+                if verbose:
+                    print np.real(P0 * Ptemp)[0:-1, -1]
+                    print np.real(obs_rates[:, i])
+                    ist = raw_input('What the duece?')
                 print bestxopt
                 P0 = converge_pops(popdict, P0)
                 reestimate = True
@@ -769,17 +799,6 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
         P0 = P0 * conv_scrambling_matrix(P)
 
     return (xopts, pdlist)
-
-
-
-def initStartingPoint(obs_rates, nd, t, merged_pd, P0):
-    """Choose an initial starting point using a pairwise
-    estimate of migration rates and pop sizes.
-    """
-    x0 = np.zeros(nd * (nd + 1) / 2)
-    for i in xrange(nd):
-        pass
-
 
 def mp2np(mat):
     """
@@ -844,3 +863,12 @@ def getCoalescentRates(coalProb, gens):
     rates = -np.log(1-p)
     rates = rates/gens
     return rates
+
+def initStartingPoint(obs_rates, nd, t, merged_pd, P0):
+    """Choose an initial starting point using a pairwise
+    estimate of migration rates and pop sizes.
+    """
+    x0 = np.zeros(nd * (nd + 1) / 2)
+    for i in xrange(nd):
+        pass
+
