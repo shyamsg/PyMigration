@@ -454,52 +454,6 @@ def cond_to_psmc(condRates):
 
     return marg_rates
 
-
-def bhatt_bern(p1o, p2o):
-    """This function estimates the Bhattacharya distance between two
-    lists of bernouill's. The first list contains the p parameter 
-    of the Bernoullis and the second vector contains a second set of
-    p parameters. The distance then is the cumulative distance of all
-    the Bernoulli.
-    """
-    p1 = p1o.getA()
-    p2 = p2o.getA()
-    return -np.min(np.real(np.sqrt(p1 * p2) + np.sqrt((1 - p1) * (1 - p2))))
-
-
-def plot_truth(obs_rates, N1s, N2s, m, t, slicenum = 0):
-    """Plot the loss function for the all the parameters.
-    """
-    nr = np.shape(obs_rates)[0] + 1
-    numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
-    print 'Starting iterations'
-    orates = obs_rates[:, slicenum]
-    P0 = np.matrix(np.eye(nr))
-    N1s = [ 1.0 / x for x in N1s ]
-    N2s = [ 1.0 / x for x in N2s ]
-    cnt = 0
-    fvals = np.zeros((len(N1s), len(N2s), len(m)))
-    for ms in xrange(len(m)):
-        for N1 in xrange(len(N1s)):
-            for N2 in xrange(len(N2s)):
-                xm = np.hstack(([N1s[N1], N2s[N2]], m[ms]))
-                fvals[N1, N2, ms] = compute_Frob_norm_mig(xm, t, orates, P0)
-                cnt += 1
-
-        if cnt % 1600 == 0:
-            print 'Done with ', cnt, 'm values'
-
-    return fvals
-
-def getCoalescentRates(coalProb, gens):
-    """This function converts the coalescent probabilities
-    to per generation coalescent rates.
-    """
-    p = np.array(coalProb)
-    rates = -np.log(1-p)
-    rates = rates/gens
-    return rates
-
 def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0):
     """This function takes the optimal paramters found and 
     figures out if the populations need to be merged.
@@ -700,8 +654,6 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
     FTOL = 10.0
     EPSILON = 1e-11
     RESTARTS = 40
-    CHECKVAL = 41
-    COARSEFVAL = 1e-08
     FLIMIT = 1e-15
     numslices = len(t)
     nr = np.shape(obs_rates)[0] + 1
@@ -772,11 +724,9 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                     print 'Error:', e.message
 
                 nrestarts += 1
-                if nrestarts > CHECKVAL and bestfval > COARSEFVAL:
-                    break
 
             if verbose:
-                print bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
+                print 'Diagnostics:', bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
             Ne_inv = bestxopt[0:numdemes]
             mtemp = bestxopt[numdemes:]
             popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration)
@@ -856,3 +806,41 @@ def popIndices(pops, numPops):
             p += 1
 
     return indices
+
+
+################################################
+# These are helper functions, not needed for   #
+# parameter estimation.                        #
+################################################
+def plot_truth(obs_rates, N1s, N2s, m, t, slicenum = 0):
+    """Plot the loss function for the all the parameters.
+    """
+    nr = np.shape(obs_rates)[0] + 1
+    numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
+    print 'Starting iterations'
+    orates = obs_rates[:, slicenum]
+    P0 = np.matrix(np.eye(nr))
+    N1s = [ 1.0 / x for x in N1s ]
+    N2s = [ 1.0 / x for x in N2s ]
+    cnt = 0
+    fvals = np.zeros((len(N1s), len(N2s), len(m)))
+    for ms in xrange(len(m)):
+        for N1 in xrange(len(N1s)):
+            for N2 in xrange(len(N2s)):
+                xm = np.hstack(([N1s[N1], N2s[N2]], m[ms]))
+                fvals[N1, N2, ms] = compute_Frob_norm_mig(xm, t, orates, P0)
+                cnt += 1
+
+        if cnt % 1600 == 0:
+            print 'Done with ', cnt, 'm values'
+
+    return fvals
+
+def getCoalescentRates(coalProb, gens):
+    """This function converts the coalescent probabilities
+    to per generation coalescent rates.
+    """
+    p = np.array(coalProb)
+    rates = -np.log(1-p)
+    rates = rates/gens
+    return rates
