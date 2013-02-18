@@ -6,8 +6,8 @@ import scipy.optimize as opt
 import boundNM as bnm
 import sys
 import mpmath as mp
-mp.dps = 24
-mp.pretty = True
+#mp.dps = 24
+#mp.pretty = True
 import itertools as it
 import pdb
 
@@ -86,8 +86,10 @@ def comp_pw_coal_cont(m, Ne_inv):
 def expM(Q):
     """Computes the matrix exponential using an eigenvalue decomposition
     """
+#    if not hasattr(expM, "cnt"):
+#        expM.cnt = 0
     COND_NUM_THRES = 1e+50
-    EIG_THRES = 1e-12
+    EIG_THRES = 1e-20
     L, U = linalg.eig(Q)
     slm = np.max(np.abs(L))
     for i in xrange(len(L)):
@@ -98,7 +100,6 @@ def expM(Q):
     U = np.matrix(U)
     eQ = U * L * U.I
     return eQ
-
 
 def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
     """Function to compute the order 2 norm distance between the 
@@ -120,11 +121,11 @@ def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
 
     Q = comp_pw_coal_cont(m, Ne_inv)
     try:
-        Pcurr = np.abs(np.round(expM(t * Q), 12))
+        Pcurr = (np.round(expM(t * Q), 12))
     except ValueError as v:
         print 'IN FUNC CFNM'
         print m
-        print Ne
+        print Ne_inv
         print 'OUT FUNC CFNM'
         raise v
 
@@ -140,7 +141,14 @@ def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
         est_temp = average_coal_rates(Pcurr, popdict)
         if logVal:
 #            tempo = linalg.norm(np.log(obs_temp + 1e-200) + np.log(1 - obs_temp + 1e-200) - np.log(est_temp + 1e-200) - np.log(1 - est_temp + 1e-200), 2) ** 2
-            tempo = linalg.norm(np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200), 2) ** 2
+            temp1 = np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200)
+            if (np.isnan(temp1).any() or np.isinf(temp1).any()):
+                Pcurr = Ck * P0 * mp2np(mp.expm(t*Q)) *Dk.T
+                est_temp = average_coal_rates(Pcurr, popdict)
+                temp1 = np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200)            
+                print '1'
+
+            tempo = linalg.norm(temp1, 2) ** 2
         else:
             tempo = linalg.norm(obs_temp - est_temp, 2) ** 2
     except:
@@ -150,8 +158,19 @@ def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
 #        print 'Q', Q
 #        print 'P', expM(t * Q)
 #        print 'P0', P0
-#        print obs_temp
-#        print est_temp
+#        print 'obs_temp: ', obs_temp
+#        print 'est_temp: ', est_temp
+#        print 'm: ', m
+#        print 'Ne_inv: ', Ne_inv
+#        print 'popdict: ', popdict
+#        print 'Q: ', Q
+#        print 'eQ: ', expM(t*Q)
+#        print 'exp(tQ): ', mp.expm(t*Q)
+#        print 'Ck: ', Ck
+#        print 'Dk: ', Dk.T
+#        print 'P0: ', P0
+#        print 'Pcurr: ', Ck*P0*expM(t*Q)*Dk.T
+#        ist = raw_input('No way jose?')
 #        print np.log(obs_temp + 1e-200)
 #        print np.log(1 - obs_temp + 1e-200)
 #        print np.log(est_temp + 1e-200)
@@ -263,7 +282,6 @@ def compute_pw_coal_rates(Nes, ms, ts, popmaps):
     exp_rates = np.matrix(np.max((np.zeros(np.shape(exp_rates)), exp_rates), 0))
     return exp_rates
 
-
 def construct_poparr(popdict):
     """Convert the array from comp_N_m into the desired format for 
     converge pops.
@@ -271,8 +289,6 @@ def construct_poparr(popdict):
     popToIndex = {}
     nd = len(popdict)
     currIndex = 0
-# This is popdict    [[2],[2],[0,1]]
-# nd is 3
     for ii in xrange(nd):
         if len(popdict[ii]) == 0:
             popToIndex[ii] = currIndex
@@ -782,13 +798,14 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
 
                 xopts.append(np.array(modXopt))
                 Ne_inv = bestxopt[0:numdemes]
-                mtemp = bestxopt[numdemes:]
+                mtemp = np.abs(bestxopt[numdemes:])
 
         m = np.zeros((numdemes, numdemes))
         cnt = 0
         for ii in xrange(numdemes):
             for jj in xrange(ii + 1, numdemes):
-                m[ii, jj] = m[jj, ii] = mtemp[cnt]
+                if mtemp[cnt] > 0:
+                    m[ii, jj] = m[jj, ii] = mtemp[cnt]
                 cnt += 1
 
         Q = comp_pw_coal_cont(m, Ne_inv)
