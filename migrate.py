@@ -606,11 +606,10 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0)
                 medianRates = np.median(dists)
                 rangeRates = np.max(dists) - np.min(dists)
                 sdRates = np.sqrt(np.var(dists))
-                print 'CV:', meanRates, rangeRates, rangeRates / meanRates, sdRates/meanRates
+                print 'CV:', sdRates, meanRates, rangeRates, rangeRates / meanRates, sdRates/meanRates
                 if sdRates/meanRates < merge_threshold:
                     popdict[i].append(j)
                     popdict[j].append(i)
-
     else:
         popdict = []
         for kk in xrange(numdemes):
@@ -683,7 +682,7 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
     matrix. Both obs_rates and time slice lengths are given from present to past.
     """
     FTOL = 10.0
-    EPSILON = 1e-11
+    EPSILON = 1e-13
     RESTARTS = 40
     FLIMIT = 1e-15
     numslices = len(t)
