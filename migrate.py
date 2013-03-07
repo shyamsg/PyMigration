@@ -11,6 +11,18 @@ import mpmath as mp
 import itertools as it
 import pdb
 
+def logit(p):
+    """Logit function to convert a vector of probs
+    to logits.
+    """
+    return np.log(p/(1.0-p))
+
+def expit(a):
+    """Returns inverse logit of the values.
+    """
+    t = np.exp(a)
+    return t/(t+1.0))
+
 def comp_pw_coal_disc(m, Ne, t):
     """Function evaluates the coalescent intensities for the 
     given migration matrix and effective population sizes, in the
@@ -485,7 +497,7 @@ def cond_to_psmc(condRates):
 
     return marg_rates
 
-def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0):
+def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0, hack=False):
     """This function takes the optimal paramters found and 
     figures out if the populations need to be merged.
     """
@@ -500,11 +512,11 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0)
         # know nothing about the outside world.
         # The resetting parts should be the duty of the 
         # calling function.
-        if not hasattr(find_pop_merges, "rates_1"):
-            find_pop_merges.rates_1 = None
+        if not hasattr(find_pop_merges, "states_1"):
+            find_pop_merges.states_1 = None
         #This rates_2 is the 2 back rate vector
-        if not hasattr(find_pop_merges, "rates_2"):
-            find_pop_merges.rates_2 = None
+        if not hasattr(find_pop_merges, "states_2"):
+            find_pop_merges.states_2 = None
 
         m = np.zeros((numdemes, numdemes))
         cnt = 0
@@ -527,12 +539,12 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0)
         # peeking into the future, then setting mergers and resuming 
         # by resetting our pop model 2 timeslots back in the past.
            
-        if find_pop_merges.rates_1 == None:
-            rates_1 = P
+        if find_pop_merges.states_1 == None:
+            find_pop_merges.states_1 = (P0, P)
             return popdict
-        if find_pop_merges.rates_2 == None:
-            rates_2 = rates_1
-            rates_1 = P
+        if find_pop_merges.states_2 == None:
+            find_pop_merges.states_2 = find_pop_merges.states_1
+            find_pop_merges.states_1 = (P0, P)
             return popdict
         # The pop merger check is a 3 sample paired t-test equivalent
         # r11.1 r12.1 r22.1 are the rates in the first time slice (2 back)
@@ -553,6 +565,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0)
                 dists.append(P[(2 * numdemes - i + 1) * i / 2 + (j - i)])
                 dists.append(P[(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
+                dists = logit(dists)
                 meanRates[0] = np.mean(dists)
                 medianRates[0] = np.median(dists)
                 rangeRates[0] = np.max(dists) - np.min(dists)
