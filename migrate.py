@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 from scipy import linalg
 import scipy.optimize as opt
+from scipy.stats import chi2
 import boundNM as bnm
 import sys
 import mpmath as mp
@@ -502,29 +503,28 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
     figures out if the populations need to be merged.
     """
     numdemes = len(Ninv)
-    if (window == 2):
-	#The following sets up the static vars that we need
-	# to keep track of the previous 2 rate vectors.
-        # This rates_1 is the one back rate vector
-        # also need to store the 2 back scrambling
-        # matrix - let us see where to store it.
-        # This is not the place since this function should
-        # know nothing about the outside world.
-        # The resetting parts should be the duty of the 
-        # calling function.
-        if not hasattr(find_pop_merges, "states_1"):
-            find_pop_merges.states_1 = None
+    #The following sets up the static vars that we need
+    # to keep track of the previous 2 rate vectors.
+    # This rates_1 is the one back rate vector
+    # also need to store the 2 back scrambling
+    # matrix - let us see where to store it.
+    # This is not the place since this function should
+    # know nothing about the outside world.
+    # The resetting parts should be the duty of the 
+    # calling function.
+    if not hasattr(find_pop_merges, "states_1"):
+        find_pop_merges.states_1 = None
         #This rates_2 is the 2 back rate vector
-        if not hasattr(find_pop_merges, "states_2"):
-            find_pop_merges.states_2 = None
+    if not hasattr(find_pop_merges, "states_2"):
+        find_pop_merges.states_2 = None
 
+    if (window == 2):
         m = np.zeros((numdemes, numdemes))
         cnt = 0
         for ii in xrange(numdemes):
             for jj in xrange(ii + 1, numdemes):
                 m[ii, jj] = m[jj, ii] = mtemp[cnt]
                 cnt += 1
-
         Q = comp_pw_coal_cont(m, Ninv)
         P = expM(t * Q)[0:-1, -1]
         popdict = []
@@ -538,14 +538,13 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
         # are checking for mergers 2 timeslots back. Essentially we are
         # peeking into the future, then setting mergers and resuming 
         # by resetting our pop model 2 timeslots back in the past.
-           
         if find_pop_merges.states_1 == None:
             find_pop_merges.states_1 = (P0, P)
-            return popdict
+            return (find_pop_merges.states_2, construct_poparr(popdict))
         if find_pop_merges.states_2 == None:
             find_pop_merges.states_2 = find_pop_merges.states_1
             find_pop_merges.states_1 = (P0, P)
-            return popdict
+            return (find_pop_merges.states_2, construct_poparr(popdict))
         # The pop merger check is a 3 sample paired t-test equivalent
         # r11.1 r12.1 r22.1 are the rates in the first time slice (2 back)
         # r11.2 r12.2 r22.2 are the rates in the first time slice (1 back)
@@ -560,39 +559,62 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
         stats = np.zeros(3)
         for i in xrange(numdemes):
             for j in xrange(i + 1, numdemes):
+                merge = False
+                overdists = np.zeros((3,3))
                 dists = []
                 dists.append(P[(2 * numdemes - i + 1) * i / 2])
                 dists.append(P[(2 * numdemes - i + 1) * i / 2 + (j - i)])
                 dists.append(P[(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
                 dists = logit(dists)
+                overdists[0,:] = dists
                 meanRates[0] = np.mean(dists)
                 medianRates[0] = np.median(dists)
                 rangeRates[0] = np.max(dists) - np.min(dists)
                 sdRates[0] = np.sqrt(np.var(dists))
                 dists = []
-                dists.append(rates_1[(2 * numdemes - i + 1) * i / 2])
-                dists.append(rates_1[(2 * numdemes - i + 1) * i / 2 + (j - i)])
-                dists.append(rates_1[(2 * numdemes - j + 1) * j / 2])
+                dists.append(rates_1[1][(2 * numdemes - i + 1) * i / 2])
+                dists.append(rates_1[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
+                dists.append(rates_1[1][(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
+                dists = logit(dists)
+                overdists[1,:] = dists
                 meanRates[1] = np.mean(dists)
                 medianRates[1] = np.median(dists)
                 rangeRates[1] = np.max(dists) - np.min(dists)
                 sdRates[1] = np.sqrt(np.var(dists))
                 dists = []
-                dists.append(rates_2[(2 * numdemes - i + 1) * i / 2])
-                dists.append(rates_2[(2 * numdemes - i + 1) * i / 2 + (j - i)])
-                dists.append(rates_2[(2 * numdemes - j + 1) * j / 2])
+                dists.append(rates_2[1][(2 * numdemes - i + 1) * i / 2])
+                dists.append(rates_2[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
+                dists.append(rates_2[1][(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
+                dists = logit(dists)
+                overdists[2,:] = dists
                 meanRates[2] = np.mean(dists)
                 medianRates[2] = np.median(dists)
                 rangeRates[2] = np.max(dists) - np.min(dists)
                 sdRates[2] = np.sqrt(np.var(dists))
-                stats = sdRates/meanRates
-                if np.mean(stats) < merge_threshold:
+                if (hack):
+                    stats = sdRates/meanRates
+                    if np.mean(stats) < merge_threshold:
+                        merge = True
+                else:
+                    # things to do. make the model for the check and
+                    # then compare the rates under the model
+                    y_0 = overdists[:,0]-overdists[:,1]
+                    y_2 = overdists[:,2]-overdists[:,1]
+                    sig2_a = (y_0**2 + y_2**2)/6.0
+                    m_0 = np.mean(y_0)
+                    m_2 = np.mean(y_2)
+                    sig2_f = ((y_0-m_0)**2 + (y_2-m_2)**2)/6
+                    lalt = -3*np.log(sig2_a) - 3
+                    lfull = -3*np.log(sig2_f) - 3
+                    lr = 2*(lalt - lfull)
+                    if lr > chi2.isf(0.95, df=2):
+                        merge = True
+                if merge:
                     popdict[i].append(j)
                     popdict[j].append(i)
-        
     elif useMigration == False:
         print 'Using coalescent rates'
         m = np.zeros((numdemes, numdemes))
@@ -607,7 +629,6 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
         popdict = []
         for i in xrange(numdemes):
             popdict.append([])
-
         for i in xrange(numdemes):
             for j in xrange(i + 1, numdemes):
                 dists = []
@@ -637,7 +658,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                 cnt += 1
 
     tellmenoe = construct_poparr(popdict)
-    return tellmenoe
+    return (find_pop_merges.states_2, tellmenoe)
 
 
 def average_coal_rates(origrates, popdict):
