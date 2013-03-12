@@ -22,7 +22,7 @@ def expit(a):
     """Returns inverse logit of the values.
     """
     t = np.exp(a)
-    return t/(t+1.0))
+    return t/(t+1.0)
 
 def comp_pw_coal_disc(m, Ne, t):
     """Function evaluates the coalescent intensities for the 
@@ -335,7 +335,7 @@ def construct_poparr(popdict):
     return popmap
 
 
-def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose = False):
+def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose = False, window=0, hack=False):
     """This function estimates the N and m parameters for the various time slices. The 
     time slices are given in a vector form 't'. t specifies the length of the time slice, not
     the time from present to end of time slice (not cumulative but atomic)
@@ -428,7 +428,7 @@ def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose
 
             Ne_inv = bestxopt[0:numdemes]
             mtemp = bestxopt[numdemes:]
-            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration)
+            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
             reestimate = False
             if len(popdict) < numdemes:
                 print 'Merging populations and reestimating parameters:', popdict
@@ -480,6 +480,8 @@ def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose
             ist = raw_input('Waiting for input...')
         P0 = conv_scrambling_matrix(P0 * P)
 
+    find_pop_merges.states_1 = None
+    find_pop_merges.states_1 = None
     return (xopts, pdlist)
 
 
@@ -519,6 +521,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
         find_pop_merges.states_2 = None
 
     if (window == 2):
+        print 'Using windowing scheme'
         m = np.zeros((numdemes, numdemes))
         cnt = 0
         for ii in xrange(numdemes):
@@ -557,6 +560,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
         medianRates = np.zeros(3)
         rangeRates = np.zeros(3)
         stats = np.zeros(3)
+        merge = False
         for i in xrange(numdemes):
             for j in xrange(i + 1, numdemes):
                 merge = False
@@ -573,9 +577,9 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                 rangeRates[0] = np.max(dists) - np.min(dists)
                 sdRates[0] = np.sqrt(np.var(dists))
                 dists = []
-                dists.append(rates_1[1][(2 * numdemes - i + 1) * i / 2])
-                dists.append(rates_1[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
-                dists.append(rates_1[1][(2 * numdemes - j + 1) * j / 2])
+                dists.append(find_pop_merges.states_1[1][(2 * numdemes - i + 1) * i / 2])
+                dists.append(find_pop_merges.states_1[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
+                dists.append(find_pop_merges.states_1[1][(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
                 dists = logit(dists)
                 overdists[1,:] = dists
@@ -584,9 +588,9 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                 rangeRates[1] = np.max(dists) - np.min(dists)
                 sdRates[1] = np.sqrt(np.var(dists))
                 dists = []
-                dists.append(rates_2[1][(2 * numdemes - i + 1) * i / 2])
-                dists.append(rates_2[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
-                dists.append(rates_2[1][(2 * numdemes - j + 1) * j / 2])
+                dists.append(find_pop_merges.states_2[1][(2 * numdemes - i + 1) * i / 2])
+                dists.append(find_pop_merges.states_2[1][(2 * numdemes - i + 1) * i / 2 + (j - i)])
+                dists.append(find_pop_merges.states_2[1][(2 * numdemes - j + 1) * j / 2])
                 dists = np.real(np.array(dists).flatten())
                 dists = logit(dists)
                 overdists[2,:] = dists
@@ -598,23 +602,40 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                     stats = sdRates/meanRates
                     if np.mean(stats) < merge_threshold:
                         merge = True
+                    else:
+                        merge = False
                 else:
                     # things to do. make the model for the check and
-                    # then compare the rates under the model
-                    y_0 = overdists[:,0]-overdists[:,1]
-                    y_2 = overdists[:,2]-overdists[:,1]
-                    sig2_a = (y_0**2 + y_2**2)/6.0
+                    # then compare the rates under the model - 
+                    # using a LRT to check if the non-merger
+                    # model is better than the merger model
+                    y_0 = overdists[:,1]-overdists[:,0]
+                    y_2 = overdists[:,2]-overdists[:,0]
+                    sig2_a = np.sum(y_0**2 + y_2**2)/6.0
                     m_0 = np.mean(y_0)
                     m_2 = np.mean(y_2)
-                    sig2_f = ((y_0-m_0)**2 + (y_2-m_2)**2)/6
+                    sig2_f = np.sum((y_0-m_0)**2 + (y_2-m_2)**2)/6
                     lalt = -3*np.log(sig2_a) - 3
                     lfull = -3*np.log(sig2_f) - 3
-                    lr = 2*(lalt - lfull)
-                    if lr > chi2.isf(0.95, df=2):
+                    lr = 2*(lfull - lalt)
+#                    print find_pop_merges.states_1[1]
+#                    print find_pop_merges.states_2[1]
+#                    print P
+#                    print overdists
+                    print y_0
+                    print y_2
+                    print sig2_a, sig2_f
+                    print 'Likelihood ratio', lr
+                    if lr > chi2.isf(merge_threshold, 2): # full model fits much better than alt
+                        merge = False
+                    else:
                         merge = True
                 if merge:
                     popdict[i].append(j)
                     popdict[j].append(i)
+        state2 = find_pop_merges.states_2
+        find_pop_merges.states_2 = find_pop_merges.states_1
+        find_pop_merges.states_1 = (P0, P)
     elif useMigration == False:
         print 'Using coalescent rates'
         m = np.zeros((numdemes, numdemes))
@@ -623,7 +644,6 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
             for jj in xrange(ii + 1, numdemes):
                 m[ii, jj] = m[jj, ii] = mtemp[cnt]
                 cnt += 1
-
         Q = comp_pw_coal_cont(m, Ninv)
         P = expM(t * Q)[0:-1, -1]
         popdict = []
@@ -658,7 +678,10 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                 cnt += 1
 
     tellmenoe = construct_poparr(popdict)
-    return (find_pop_merges.states_2, tellmenoe)
+    if len(tellmenoe) < numdemes:
+        find_pop_merges.states_1 = None
+        find_pop_merges.states_2 = None
+    return (state2, tellmenoe)
 
 
 def average_coal_rates(origrates, popdict):
@@ -678,9 +701,7 @@ def average_coal_rates(origrates, popdict):
     newrates = np.zeros((len(ptc), np.shape(origrates)[1]))
     for row in xrange(len(ptc)):
         newrates[row] = np.mean(np.real(rates[ptc[row], :]), 0)
-
     return newrates
-
 
 def make_merged_pd(pdlist):
     """Merges the sequential popdicts
@@ -708,7 +729,7 @@ def make_merged_pd(pdlist):
     return pdnew
 
 
-def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = False, logVal = True, verbose = False):
+def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = False, logVal = True, verbose = False, window=0, hack=False):
     """This function estimates the N and m parameters for the various time slices. The 
     time slices are given in a vector form 't'. t specifies the length of the time slice, not
     the time from present to end of time slice (not cumulative but atomic)
@@ -726,7 +747,9 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
     P0 = np.matrix(np.eye(nr))
     xopts = []
     pdlist = []
-    for i in xrange(numslices):
+#    for i in range(numslices):
+    i = 0
+    while i < numslices:
         print 'Running for slice ', i
         if i > 0:
             x0 = bestxopt.copy()
@@ -741,6 +764,7 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
         reestimate = True
         while reestimate:
             pdslice = make_merged_pd(pdlist)
+            print 'restarting in slice', i
             if initialize:
                 x0 = initStartingPoint(obs_rates[:, i], t[i], make_merged_pd(pdslice), P0)
             else:
@@ -793,9 +817,9 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                 print 'Diagnostics:', bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
             Ne_inv = bestxopt[0:numdemes]
             mtemp = bestxopt[numdemes:]
-            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration)
+            (state, popdict) = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
             reestimate = False
-            if len(popdict) < numdemes:
+            if len(popdict) < numdemes and window == 0:
                 print 'Merging populations and reestimating parameters:', popdict
                 Ne_inv = bestxopt[0:numdemes]
                 mtemp = bestxopt[numdemes:]
@@ -811,7 +835,6 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                 if verbose:
                     print np.real(P0 * Ptemp)[0:-1, -1]
                     print np.real(obs_rates[:, i])
-                    ist = raw_input('What the duece?')
                 print bestxopt
                 P0 = converge_pops(popdict, P0)
                 reestimate = True
@@ -821,6 +844,22 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                 lims[:] = []
                 bestfval = 1e+200
                 bestxopt = None
+            elif window > 0 and state != None and len(popdict) < numdemes:
+                #merger with the window back approach
+                del xopts[-2:] # remove the last 2 estimates
+                i = i - 2 # go back 2 timeslices
+                P0 = state[0]
+                P0 = converge_pops(popdict, P0)
+                reestimate = True
+                print popdict
+                print state[0]
+                print i
+                pdlist.append(popdict)
+                numdemes = len(popdict)
+                nr = numdemes*(numdemes+1)/2 + 1
+                lims[:] = []
+                bestfval=1e+200
+                bestxopt = None
             else:
                 modXopt = [ 1.0 / x for x in bestxopt[0:numdemes] ]
                 cnt = 0
@@ -828,7 +867,6 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                     for jj in xrange(ii + 1, numdemes):
                         modXopt.append(bestxopt[numdemes + cnt])
                         cnt = cnt + 1
-
                 xopts.append(np.array(modXopt))
                 Ne_inv = bestxopt[0:numdemes]
                 mtemp = np.abs(bestxopt[numdemes:])
@@ -847,7 +885,9 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
             print np.real(P0 * P)[0:-1, -1]
             print np.real(obs_rates[:, i])
         P0 = P0 * conv_scrambling_matrix(P)
-
+        i += 1
+    find_pop_merges.states_1 = None
+    find_pop_merges.states_1 = None
     return (xopts, pdlist)
 
 def mp2np(mat):
