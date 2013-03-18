@@ -622,11 +622,23 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
 #                    print find_pop_merges.states_2[1]
 #                    print P
 #                    print overdists
+                    df = 2
+                    test = 0
+                    if test == 1:
+                        y = y_0+y_2
+                        m = np.mean(y)
+                        sig2_f = np.mean((y-m)**2)
+                        sig2_a = np.mean(y**2)
+                        lr = -3*(np.log(sig2_f)-np.log(sig2_a))
+                        df = 1
+                    elif test == 2:
+                        
                     print y_0
                     print y_2
+#                    print y, m
                     print sig2_a, sig2_f
                     print 'Likelihood ratio', lr
-                    if lr > chi2.isf(merge_threshold, 2): # full model fits much better than alt
+                    if lr > chi2.isf(merge_threshold, df): # full model fits much better than alt
                         merge = False
                     else:
                         merge = True
@@ -886,8 +898,12 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
             print np.real(obs_rates[:, i])
         P0 = P0 * conv_scrambling_matrix(P)
         i += 1
-    find_pop_merges.states_1 = None
-    find_pop_merges.states_1 = None
+    if hasattr(find_pop_merges, "states_1"):
+        find_pop_merges.states_1 = None
+        print 'resetting state 1'
+    if hasattr(find_pop_merges, "states_2"):
+        find_pop_merges.states_2 = None
+        print 'resetting state 2'
     return (xopts, pdlist)
 
 def mp2np(mat):
