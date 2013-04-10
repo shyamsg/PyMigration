@@ -245,7 +245,7 @@ class run_single_sim:
         self.obsRates = curr_rates
         self.timeslices = curr_times
 
-    def estimate_sim_run(self, merge_threshold = 0.01, useMigration = False, DFO = False):
+    def estimate_sim_run(self, merge_threshold = 0.01, useMigration = False, DFO = False, window = 0, hack = False):
         """This function estimates the pop and mig in each
         timeslice and returns it. If useMigration, the threshold
         is the migration threshold, if not the threshold is the
@@ -254,7 +254,7 @@ class run_single_sim:
         if DFO:
             self.estimatedParms = mig.comp_N_m(self.obsRates, self.timeslices, merge_threshold, useMigration, self.logVal, self.verbose)
         else:
-            self.estimatedParms = mig.comp_N_m_bfgs(self.obsRates, self.timeslices, merge_threshold, useMigration, False, self.logVal, self.verbose)
+            self.estimatedParms = mig.comp_N_m_bfgs(self.obsRates, self.timeslices, merge_threshold, useMigration, False, self.logVal, self.verbose, window, hack)
         return self.estimatedParms
 
 
