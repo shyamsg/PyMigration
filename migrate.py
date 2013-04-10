@@ -631,10 +631,10 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                         sig2_a = np.mean(y**2)
                         lr = -3*(np.log(sig2_f)-np.log(sig2_a))
                         df = 1
-                    elif test == 2:
+#                    elif test == 2:
                         
-                    print y_0
-                    print y_2
+#                    print y_0
+#                    print y_2
 #                    print y, m
                     print sig2_a, sig2_f
                     print 'Likelihood ratio', lr
