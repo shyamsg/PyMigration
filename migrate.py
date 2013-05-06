@@ -520,6 +520,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
     if not hasattr(find_pop_merges, "states_2"):
         find_pop_merges.states_2 = None
 
+    state2 = None
     if (window == 2):
         print 'Using windowing scheme'
         m = np.zeros((numdemes, numdemes))
