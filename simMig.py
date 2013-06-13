@@ -174,7 +174,7 @@ class run_single_sim:
     of rates is dropped.
     """
 
-    def __init__(self, popScaling, ratefile, timeStr, ignoreLast = False, logVal = True, verbose = False):
+    def __init__(self, popScaling, ratefile, timeStr, ignoreLast = False, logVal = True, verbose = False, varfile=''):
         """Initialization function of the class.
         """
         self.verbose = verbose
@@ -182,6 +182,10 @@ class run_single_sim:
         self.modified = False
         self.obsRates = []
         self.logVal = logVal
+        self.varGiven = False
+        self.withinvar = []
+        self.betweenvar = []
+        self.vars = []
         times = []
         popScaling = float(popScaling)
         r = open(ratefile)
@@ -190,13 +194,32 @@ class run_single_sim:
             times.append(float(toks[0]) * popScaling)
             currRates = [ float(x) for x in toks[1:] ]
             self.obsRates.append(currRates)
-
+        r.close()
         self.timeslices = times
         self.timeStr = timeStr
         if ignoreLast:
             self.obsRates = self.obsRates[0:-1]
             self.timeslices = self.timeslices[0:-1]
         self.obsRates = np.matrix(self.obsRates).T
+        if varfile != '':
+            if self.logVal:
+                print 'Warning: Setting logVal to True when variances are given.'
+                print 'Using the delta method to compute the variance of the log transform.'
+            self.varGiven = True
+            r = open(varfile)
+            for line in r:
+                line = line.strip().split()
+                self.withinvar.append(float(line[1]))
+                self.betweenvar.append(float(line[2]))
+            r.close()
+            self.vars=np.array([self.withinvar, self.betweenvar])
+            print np.shape(self.vars)
+            print np.shape(self.timeslices)
+            print np.shape(self.obsRates)
+            if len(self.withinvar) < len(self.timeslices):
+                print 'Fewer variances than timeslice given. Correct error to continue.'
+                sys.exit(1)
+            
 
     def modify_rates(self):
         """The rates obtained from PSMC are the prob of coal 
@@ -208,6 +231,10 @@ class run_single_sim:
         """
         if self.modified:
             print 'Already Modified Probabilities'
+        elif self.varGiven:
+            print 'You must enter the conditional coalescent probabilties if you want to supply variance of'
+            print 'the coalescent probabilities. Required since we cannot compute the variance of the conditionals'
+            print 'given the variance of the marginals. Assuming that you gave the conditional probs.'
         else:
             testrates = self.obsRates.copy()
             tratesum = testrates.cumsum(1)
@@ -254,7 +281,7 @@ class run_single_sim:
         if DFO:
             self.estimatedParms = mig.comp_N_m(self.obsRates, self.timeslices, merge_threshold, useMigration, self.logVal, self.verbose)
         else:
-            self.estimatedParms = mig.comp_N_m_bfgs(self.obsRates, self.timeslices, merge_threshold, useMigration, False, self.logVal, self.verbose, window, hack)
+            self.estimatedParms = mig.comp_N_m_bfgs(self.obsRates, self.timeslices, merge_threshold, useMigration, False, self.logVal, True, window, hack, variances=self.vars)
         return self.estimatedParms
 
 

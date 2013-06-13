@@ -1,4 +1,3 @@
-#Embedded file name: /home/shyamg/projects/Migration/Code/migrate.py
 import numpy as np
 import pickle
 from scipy import linalg
@@ -11,6 +10,8 @@ import mpmath as mp
 #mp.pretty = True
 import itertools as it
 import pdb
+
+EPS = 1e-200
 
 def logit(p):
     """Logit function to convert a vector of probs
@@ -114,13 +115,8 @@ def expM(Q):
     eQ = U * L * U.I
     return eQ
 
-def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
-    """Function to compute the order 2 norm distance between the 
-    observed coalescent intensities and coalescent intensities 
-    computed using the given N and m
-    The input is given as x - a vector with N and m values
-    P0 is the initial scrambling matrix. Note that we work with 1/N and
-    m values, as preconditioning to make the problem more spherical.
+def compute_cost_function(x, t, obs_coal_rates, P0, popdict, cftype=0):
+    """This function computes the cost function given the parameters.
     """
     k = int((np.sqrt(1 + 8 * len(x)) - 1) / 2.0)
     Ne_inv = x[0:k]
@@ -149,29 +145,98 @@ def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True):
     if np.shape(obs_coal_rates) != np.shape(Pcurr):
         print 'Dimensions: Observed -> ' + str(np.shape(obs_coal_rates)) + ' and Computed -> ' + str(np.shape(Pcurr))
         raise Exception('Dimensions of observed and computed vectors do not match.')
+
+    #cftype 0 => (o-e)^2/e
+    if cftype == 0:
+        tempout = (obs_coal_rates - Pcurr)
+        costfun = np.sum(np.multiply(tempout, tempout)/(Pcurr+EPS))
+    #cftype 1 => e*(l(o)-l(e))^2
+    elif cftype == 1:
+        tempout = (np.log(obs_coal_rates + EPS) - np.log(Pcurr + EPS))
+        tempout = np.multiply(tempout, tempout)
+        costfun = np.sum(np.multiply(Pcurr, tempout))
+    elif cftype == 2:
+        return 1
+    return costfun
+
+def compute_Frob_norm_mig(x, t, obs_coal_rates, P0, popdict, logVal = True, variances=[]):
+    """Function to compute the order 2 norm distance between the 
+    observed coalescent intensities and coalescent intensities 
+    computed using the given N and m
+    The input is given as x - a vector with N and m values
+    P0 is the initial scrambling matrix. Note that we work with 1/N and
+    m values, as preconditioning to make the problem more spherical.
+    """
+#    print obs_coal_rates
+#    print variances
+#    al = raw_input('t2')
+    k = int((np.sqrt(1 + 8 * len(x)) - 1) / 2.0)
+    Ne_inv = x[0:k]
+    ms = x[k:]
+    m = np.zeros((k, k))
+    cnt = 0
+    variances = np.array(variances)
+    for i in xrange(k):
+        for j in xrange(i + 1, k):
+            m[i, j] = m[j, i] = ms[cnt]
+            cnt += 1
+
+    Q = comp_pw_coal_cont(m, Ne_inv)
     try:
-        obs_temp = average_coal_rates(obs_coal_rates, popdict)
-        est_temp = average_coal_rates(Pcurr, popdict)
+        Pcurr = (np.round(expM(t * Q), 12))
+    except ValueError as v:
+        print 'IN FUNC CFNM'
+        print m
+        print Ne_inv
+        print 'OUT FUNC CFNM'
+        raise v
+
+    dims = np.shape(P0)
+    Ck = np.matrix(np.eye(dims[0]))[0:dims[0] - 1, :]
+    Dk = np.matrix(np.eye(dims[1]))[dims[1] - 1, :]
+    Pcurr = Ck * P0 * Pcurr * Dk.T
+    if np.shape(obs_coal_rates) != np.shape(Pcurr):
+        print 'Dimensions: Observed -> ' + str(np.shape(obs_coal_rates)) + ' and Computed -> ' + str(np.shape(Pcurr))
+        raise Exception('Dimensions of observed and computed vectors do not match.')
+    try:
+#        obs_temp = average_coal_rates(obs_coal_rates, popdict)
+#        est_temp = average_coal_rates(Pcurr, popdict)
+        obs_temp = obs_coal_rates.copy()
+        est_temp = Pcurr
         if logVal:
-#            tempo = linalg.norm(np.log(obs_temp + 1e-200) + np.log(1 - obs_temp + 1e-200) - np.log(est_temp + 1e-200) - np.log(1 - est_temp + 1e-200), 2) ** 2
             temp1 = np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200)
             if (np.isnan(temp1).any() or np.isinf(temp1).any()):
-                Pcurr = Ck * P0 * mp2np(mp.expm(t*Q)) *Dk.T
-                est_temp = average_coal_rates(Pcurr, popdict)
-                temp1 = np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200)            
-                print '1'
-
-            tempo = linalg.norm(temp1, 2) ** 2
+                Pcurr = Ck * P0 * mp2np(mp.expm(t*Q))*Dk.T
+                est_temp = Pcurr
+                print 'Using mp'
+            if len(variances) > 0:
+                temp1 = np.multiply(np.log(obs_temp+1e-200), obs_temp) - np.multiply(np.log(est_temp+1e-200), est_temp)
+            else:
+                temp1 = np.log(obs_temp + 1e-200) - np.log(est_temp + 1e-200)
         else:
-            tempo = linalg.norm(obs_temp - est_temp, 2) ** 2
+            temp1 = (obs_temp - est_temp)
+        if len(variances) > 0:
+            variances = np.sqrt(variances)
+            kk = int((np.sqrt(1 + 8 * len(obs_coal_rates)) - 1) / 2.0)
+            kcnt = 0
+            for kk1 in range(kk):
+                for kk2 in range(kk1, kk):
+                    if kk1 == kk2:
+                        temp1[kcnt] /= variances[0]
+                    else:
+                        temp1[kcnt] /= variances[1]
+                    kcnt += 1
+        tempo = linalg.norm(temp1, 2) ** 2
     except:
+        print 'temp1 shape', np.shape(temp1)
+        print 'ocr shape', np.shape(obs_temp)
 #        print 'obsRates', obs_coal_rates
 #        print 'average', average_coal_rates(obs_coal_rates, popdict)
 #        print 'curr', Pcurr
 #        print 'Q', Q
 #        print 'P', expM(t * Q)
 #        print 'P0', P0
-#        print 'obs_temp: ', obs_temp
+        print 'obs_temp: ', obs_temp
 #        print 'est_temp: ', est_temp
 #        print 'm: ', m
 #        print 'Ne_inv: ', Ne_inv
@@ -334,157 +399,6 @@ def construct_poparr(popdict):
 
     return popmap
 
-
-def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose = False, window=0, hack=False):
-    """This function estimates the N and m parameters for the various time slices. The 
-    time slices are given in a vector form 't'. t specifies the length of the time slice, not
-    the time from present to end of time slice (not cumulative but atomic)
-    Also, the obs_rates are given, for each time slice are given in columns of the obs_rates
-    matrix. Both obs_rates and time slice lengths are given from present to past.
-    """
-    FTOL = 1e-15
-    XTOL = 1e-15
-    RESTARTS = 40
-    RESEED = RESTARTS / 10
-    FLIMIT = 1e-15
-    numslices = len(t)
-    nr = np.shape(obs_rates)[0] + 1
-    numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
-    print 'Starting iterations'
-    P0 = np.matrix(np.eye(nr))
-    N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
-    lims = [(1e-10, 0.01)] * numdemes
-    m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
-    lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
-    x0 = np.hstack((N0_inv, m0))
-    xopts = []
-    pdlist = []
-    for i in xrange(numslices):
-        print 'Running for slice ', i
-        if i > 0:
-            print 'Slice', i - 1, 'optimum', bestxopt
-            x0 = bestxopt.copy()
-            xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-             obs_rates[:, i],
-             P0,
-             make_merged_pd(pdlist),
-             logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
-            bestxopt = xopt
-            bestfval = fun
-        else:
-            bestxopt = None
-            bestfval = 1e+200
-        reestimate = True
-        while reestimate:
-            pdslice = make_merged_pd(pdlist)
-            print 'pdslice:', pdslice
-            N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
-            m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
-            x0 = np.hstack((N0_inv, m0))
-            lims = [(1e-15, 0.01)] * numdemes
-            lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
-            xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-             obs_rates[:, i],
-             P0,
-             pdslice,
-             logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
-            if fun < bestfval:
-                bestfval = fun
-                bestxopt = xopt
-            N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
-            m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
-            x0 = np.hstack((N0_inv, m0))
-            nrestarts = 0
-            xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-             obs_rates[:, i],
-             P0,
-             pdslice,
-             logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
-            if fun < bestfval:
-                bestxopt = xopt
-                bestfval = fun
-            if nrestarts % 10 == 0:
-                print nrestarts
-            while nrestarts < RESTARTS and bestfval > FLIMIT:
-                if nrestarts % RESEED != 0:
-                    deviation = 1 - 0.95 ** (nrestarts % RESEED)
-                    N0_inv = N0_inv * np.random.uniform(1 - deviation, 1 + deviation, np.shape(N0_inv))
-                    m0 = m0 * np.random.uniform(1 - deviation, 1 + deviation, np.shape(m0))
-                else:
-                    N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
-                    m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
-                x0 = np.hstack((N0_inv, m0))
-                xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-                 obs_rates[:, i],
-                 P0,
-                 pdslice,
-                 logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
-                if fun < bestfval:
-                    bestfval = fun
-                    bestxopt = xopt
-                if nrestarts % 10 == 0:
-                    print nrestarts
-                nrestarts += 1
-
-            Ne_inv = bestxopt[0:numdemes]
-            mtemp = bestxopt[numdemes:]
-            popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
-            reestimate = False
-            if len(popdict) < numdemes:
-                print 'Merging populations and reestimating parameters:', popdict
-                Ne_inv = bestxopt[0:numdemes]
-                mtemp = bestxopt[numdemes:]
-                m = np.zeros((numdemes, numdemes))
-                cnt = 0
-                for ii in xrange(numdemes):
-                    for jj in xrange(ii + 1, numdemes):
-                        m[ii, jj] = m[jj, ii] = mtemp[cnt]
-                        cnt += 1
-
-                Qtemp = comp_pw_coal_cont(m, Ne_inv)
-                Ptemp = expM(t[i] * Qtemp)
-                if verbose:
-                    print np.real(P0 * Ptemp)[0:-1, -1]
-                    print np.real(obs_rates[:, i])
-                    ist = raw_input('What the duece?')
-                print bestxopt
-                P0 = converge_pops(popdict, P0)
-                reestimate = True
-                pdlist.append(popdict)
-                numdemes = len(popdict)
-                nr = numdemes * (numdemes + 1) / 2 + 1
-                lims[:] = []
-                bestfval = 1e+200
-                bestxopt = None
-            else:
-                modXopt = bestxopt[0:nr - 1].copy()
-                for iii in xrange(numdemes):
-                    modXopt[iii] = 1.0 / modXopt[iii]
-
-                xopts.append(modXopt)
-                Ne_inv = bestxopt[0:numdemes]
-                mtemp = bestxopt[numdemes:]
-
-        m = np.zeros((numdemes, numdemes))
-        cnt = 0
-        for ii in xrange(numdemes):
-            for jj in xrange(ii + 1, numdemes):
-                m[ii, jj] = m[jj, ii] = mtemp[cnt]
-                cnt += 1
-
-        Q = comp_pw_coal_cont(m, Ne_inv)
-        P = expM(t[i] * Q)
-        if verbose:
-            print np.real(P0 * P)[0:-1, -1]
-            print np.real(obs_rates[:, i])
-            ist = raw_input('Waiting for input...')
-        P0 = conv_scrambling_matrix(P0 * P)
-
-    find_pop_merges.states_1 = None
-    find_pop_merges.states_1 = None
-    return (xopts, pdlist)
-
-
 def cond_to_psmc(condRates):
     """Function to convert the conditional rates
     to the marginals, of the form returned by psmc.
@@ -632,8 +546,7 @@ def find_pop_merges(Ninv, mtemp, t, P0, merge_threshold, useMigration, window=0,
                         sig2_a = np.mean(y**2)
                         lr = -3*(np.log(sig2_f)-np.log(sig2_a))
                         df = 1
-#                    elif test == 2:
-                        
+#                    elif test == 2:                        
 #                    print y_0
 #                    print y_2
 #                    print y, m
@@ -742,7 +655,7 @@ def make_merged_pd(pdlist):
     return pdnew
 
 
-def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = False, logVal = True, verbose = False, window=0, hack=False):
+def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = False, logVal = True, verbose = False, window=0, hack=False, variances=[]):
     """This function estimates the N and m parameters for the various time slices. The 
     time slices are given in a vector form 't'. t specifies the length of the time slice, not
     the time from present to end of time slice (not cumulative but atomic)
@@ -762,12 +675,22 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
     pdlist = []
 #    for i in range(numslices):
     i = 0
+    if window == 1 and hack == True:
+        rerunToMerge = True
+    else:
+        rerunToMerge = False
     while i < numslices:
         print 'Running for slice ', i
+        if len(variances) != 0:
+            curVar = variances[:,i]
+        else:
+            curVar = []
+#        print curVar
+#        al = raw_input('testing')
         if i > 0:
             x0 = bestxopt.copy()
-            xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-             obs_rates[:, i], P0, make_merged_pd(pdlist), logVal), approx_grad=True, maxfun=100000, 
+            xopt, fun, dic = opt.fmin_l_bfgs_b(compute_cost_function, x0, bounds=lims, args=(t[i],
+             obs_rates[:, i], P0, make_merged_pd(pdlist), 0), approx_grad=True, maxfun=100000, 
              factr=FTOL, epsilon=EPSILON, disp=0)
             bestxopt = xopt
             bestfval = fun
@@ -777,9 +700,9 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
         reestimate = True
         while reestimate:
             pdslice = make_merged_pd(pdlist)
-            print 'restarting in slice', i
+            print 'restarting in slice', i, pdlist
             if initialize:
-                x0 = initStartingPoint(obs_rates[:, i], t[i], make_merged_pd(pdslice), P0)
+                x0 = initStartingPoint(obs_rates[:, i], t[i], make_merged_pd(pdlist), P0)
             else:
                 N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
                 m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
@@ -787,8 +710,8 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
             lims = [(1e-10, 0.01)] * numdemes
             lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
             try:
-                xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-                 obs_rates[:, i], P0, make_merged_pd(pdlist), logVal), approx_grad=True, maxfun=100000, 
+                xopt, fun, dic = opt.fmin_l_bfgs_b(compute_cost_function, x0, bounds=lims, args=(t[i],
+                 obs_rates[:, i], P0, make_merged_pd(pdlist), 0), approx_grad=True, maxfun=100000, 
                  factr=FTOL, epsilon=EPSILON, iprint=-1)
                 if fun < bestfval:
                     bestfval = fun
@@ -801,8 +724,8 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
             x0 = np.hstack((N0_inv, m0))
             nrestarts = 0
             try:
-                xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-                 obs_rates[:, i], P0, make_merged_pd(pdlist), logVal), approx_grad=True, maxfun=100000, 
+                xopt, fun, dic = opt.fmin_l_bfgs_b(compute_cost_function, x0, bounds=lims, args=(t[i],
+                 obs_rates[:, i], P0, make_merged_pd(pdlist), 0), approx_grad=True, maxfun=100000, 
                  factr=FTOL, epsilon=EPSILON, iprint=-1)
                 if fun < bestfval:
                     bestxopt = xopt
@@ -815,24 +738,85 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                 m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
                 x0 = np.hstack((N0_inv, m0))
                 try:
-                    xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
-                     obs_rates[:, i], P0, make_merged_pd(pdlist), logVal), approx_grad=True, maxfun=100000, 
+                    xopt, fun, dic = opt.fmin_l_bfgs_b(compute_cost_function, x0, bounds=lims, args=(t[i],
+                     obs_rates[:, i], P0, make_merged_pd(pdlist), 0), approx_grad=True, maxfun=100000, 
                      factr=FTOL, epsilon=EPSILON, iprint=-1)
                     if fun < bestfval:
                         bestfval = fun
                         bestxopt = xopt
                 except Exception as e:
                     print 'Error:', e.message
-
                 nrestarts += 1
 
             if verbose:
                 print 'Diagnostics:', bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
             Ne_inv = bestxopt[0:numdemes]
             mtemp = bestxopt[numdemes:]
-            (state, popdict) = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
+            if rerunToMerge:
+                # This part of the code will rerun all the 2 pop merges and
+                # choose the one that does best. If none of them beat the 
+                # original, then do not merge.
+                print 'Rerun to merge - best function value', bestfval, pdlist
+                ndtemp = numdemes - 1
+                merge = False
+                newpopdict = []
+                for kk in xrange(numdemes):
+                    newpopdict.append([])
+                newpopdict = construct_poparr(newpopdict)
+                curfuntemp = bestfval
+                limstemp = [(1e-10, 0.01)] * ndtemp
+                limstemp += [(0, 0.1)] * (ndtemp * (ndtemp - 1) / 2)
+                for p1 in range(numdemes):
+                    for p2 in range(p1+1, numdemes):
+                        podit = []
+                        for kk in xrange(numdemes):
+                            podit.append([])
+                        podit[p1].append(p2)
+                        podit[p2].append(p1)
+                        pdtemp = construct_poparr(podit)
+                        P0temp = converge_pops(pdtemp, P0)
+                        pdlisttemp = list(pdlist)
+                        pdlisttemp.append(pdtemp)
+                        bestfuntemp = 1e200
+                        for ll in xrange(5):
+                            try:
+                                N0_invtemp = np.random.uniform(5e-05, 0.001, ndtemp)
+                                m0temp = np.random.uniform(0.008, 0.001, ndtemp * (ndtemp - 1) / 2)
+                                x0temp = np.hstack((N0_invtemp, m0temp))
+                                xopttemp, funtemp, dictemp = opt.fmin_l_bfgs_b(compute_cost_function, x0temp, bounds=limstemp, 
+                                                                           args=(t[i], obs_rates[:, i], P0temp, 
+                                                                                 make_merged_pd(pdlisttemp), 0), 
+                                                                           approx_grad=True, maxfun=100000, factr=FTOL, 
+                                                                           epsilon=EPSILON, iprint=-1)
+                                if (funtemp < bestfuntemp):
+                                    bestfuntemp = funtemp
+#                                    Ne_invt = xopttemp[0:ndtemp]
+#                                    mtempt = xopttemp[ndtemp:]
+#                                    mt = np.zeros((ndtemp, ndtemp))
+#                                    cnt = 0
+#                                    for ii in xrange(ndtemp):
+#                                        for jj in xrange(ii + 1, ndtemp):
+#                                            mt[ii, jj] = mt[jj, ii] = mtempt[cnt]
+#                                            cnt += 1
+#                                    Qtempt = comp_pw_coal_cont(mt, Ne_invt)
+#                                    Ptempt = expM(t[i] * Qtempt)
+#                                    print np.real(P0temp * Ptempt)[0:-1, -1]
+#                                    print np.real(obs_rates[:, i])
+                            except Exception as e:
+                                print 'Error:', e.message
+                        print bestfuntemp 
+                        if (bestfuntemp-2) < curfuntemp:
+                            curfunctemp = bestfuntemp
+                            newpopdict = pdtemp
+                            print 'Merging', bestfuntemp, curfuntemp, bestfval
+                print 'Best func temp at rerun stage:', bestfuntemp
+                (state, popdict) = (None, newpopdict)
+                #ist = raw_input('123')
+            else:
+                (state, popdict) = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
+            print len(popdict)
             reestimate = False
-            if len(popdict) < numdemes and window == 0:
+            if len(popdict) < numdemes and window < 2:
                 print 'Merging populations and reestimating parameters:', popdict
                 Ne_inv = bestxopt[0:numdemes]
                 mtemp = bestxopt[numdemes:]
@@ -857,7 +841,7 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
                 lims[:] = []
                 bestfval = 1e+200
                 bestxopt = None
-            elif window > 0 and state != None and len(popdict) < numdemes:
+            elif window > 1 and state != None and len(popdict) < numdemes:
                 #merger with the window back approach
                 del xopts[-2:] # remove the last 2 estimates
                 i = i - 2 # go back 2 timeslices
@@ -895,6 +879,7 @@ def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = Fals
         Q = comp_pw_coal_cont(m, Ne_inv)
         P = expM(t[i] * Q)
         if verbose:
+            print 'After finishing slice', i
             print np.real(P0 * P)[0:-1, -1]
             print np.real(obs_rates[:, i])
         P0 = P0 * conv_scrambling_matrix(P)
@@ -979,3 +964,391 @@ def initStartingPoint(obs_rates, nd, t, merged_pd, P0):
     for i in xrange(nd):
         pass
 
+#########################################
+# Obsolete functions                    #
+#########################################
+# def comp_N_m(obs_rates, t, merge_threshold, useMigration, logVal = True, verbose = False, window=0, hack=False):
+#     """This function estimates the N and m parameters for the various time slices. The 
+#     time slices are given in a vector form 't'. t specifies the length of the time slice, not
+#     the time from present to end of time slice (not cumulative but atomic)
+#     Also, the obs_rates are given, for each time slice are given in columns of the obs_rates
+#     matrix. Both obs_rates and time slice lengths are given from present to past.
+#     """
+#     FTOL = 1e-15
+#     XTOL = 1e-15
+#     RESTARTS = 40
+#     RESEED = RESTARTS / 10
+#     FLIMIT = 1e-15
+#     numslices = len(t)
+#     nr = np.shape(obs_rates)[0] + 1
+#     numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
+#     print 'Starting iterations'
+#     P0 = np.matrix(np.eye(nr))
+#     N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#     lims = [(1e-10, 0.01)] * numdemes
+#     m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+#     lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
+#     x0 = np.hstack((N0_inv, m0))
+#     xopts = []
+#     pdlist = []
+#     for i in xrange(numslices):
+#         print 'Running for slice ', i
+#         if i > 0:
+#             print 'Slice', i - 1, 'optimum', bestxopt
+#             x0 = bestxopt.copy()
+#             xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#              obs_rates[:, i],
+#              P0,
+#              make_merged_pd(pdlist),
+#              logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
+#             bestxopt = xopt
+#             bestfval = fun
+#         else:
+#             bestxopt = None
+#             bestfval = 1e+200
+#         reestimate = True
+#         while reestimate:
+#             pdslice = make_merged_pd(pdlist)
+#             print 'pdslice:', pdslice
+#             N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#             m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
+#             x0 = np.hstack((N0_inv, m0))
+#             lims = [(1e-15, 0.01)] * numdemes
+#             lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
+#             xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#              obs_rates[:, i],
+#              P0,
+#              pdslice,
+#              logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
+#             if fun < bestfval:
+#                 bestfval = fun
+#                 bestxopt = xopt
+#             N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#             m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+#             x0 = np.hstack((N0_inv, m0))
+#             nrestarts = 0
+#             xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#              obs_rates[:, i],
+#              P0,
+#              pdslice,
+#              logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
+#             if fun < bestfval:
+#                 bestxopt = xopt
+#                 bestfval = fun
+#             if nrestarts % 10 == 0:
+#                 print nrestarts
+#             while nrestarts < RESTARTS and bestfval > FLIMIT:
+#                 if nrestarts % RESEED != 0:
+#                     deviation = 1 - 0.95 ** (nrestarts % RESEED)
+#                     N0_inv = N0_inv * np.random.uniform(1 - deviation, 1 + deviation, np.shape(N0_inv))
+#                     m0 = m0 * np.random.uniform(1 - deviation, 1 + deviation, np.shape(m0))
+#                 else:
+#                     N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#                     m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+#                 x0 = np.hstack((N0_inv, m0))
+#                 xopt, fun, nit, nfev, status = bnm.fmin_bound(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#                  obs_rates[:, i],
+#                  P0,
+#                  pdslice,
+#                  logVal), maxfun=100000, maxiter=10000, xtol=XTOL, ftol=FTOL, full_output=True, disp=False)
+#                 if fun < bestfval:
+#                     bestfval = fun
+#                     bestxopt = xopt
+#                 if nrestarts % 10 == 0:
+#                     print nrestarts
+#                 nrestarts += 1
+
+#             Ne_inv = bestxopt[0:numdemes]
+#             mtemp = bestxopt[numdemes:]
+#             popdict = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
+#             reestimate = False
+#             if len(popdict) < numdemes:
+#                 print 'Merging populations and reestimating parameters:', popdict
+#                 Ne_inv = bestxopt[0:numdemes]
+#                 mtemp = bestxopt[numdemes:]
+#                 m = np.zeros((numdemes, numdemes))
+#                 cnt = 0
+#                 for ii in xrange(numdemes):
+#                     for jj in xrange(ii + 1, numdemes):
+#                         m[ii, jj] = m[jj, ii] = mtemp[cnt]
+#                         cnt += 1
+
+#                 Qtemp = comp_pw_coal_cont(m, Ne_inv)
+#                 Ptemp = expM(t[i] * Qtemp)
+#                 if verbose:
+#                     print np.real(P0 * Ptemp)[0:-1, -1]
+#                     print np.real(obs_rates[:, i])
+#                     ist = raw_input('What the duece?')
+#                 print bestxopt
+#                 P0 = converge_pops(popdict, P0)
+#                 reestimate = True
+#                 pdlist.append(popdict)
+#                 numdemes = len(popdict)
+#                 nr = numdemes * (numdemes + 1) / 2 + 1
+#                 lims[:] = []
+#                 bestfval = 1e+200
+#                 bestxopt = None
+#             else:
+#                 modXopt = bestxopt[0:nr - 1].copy()
+#                 for iii in xrange(numdemes):
+#                     modXopt[iii] = 1.0 / modXopt[iii]
+
+#                 xopts.append(modXopt)
+#                 Ne_inv = bestxopt[0:numdemes]
+#                 mtemp = bestxopt[numdemes:]
+
+#         m = np.zeros((numdemes, numdemes))
+#         cnt = 0
+#         for ii in xrange(numdemes):
+#             for jj in xrange(ii + 1, numdemes):
+#                 m[ii, jj] = m[jj, ii] = mtemp[cnt]
+#                 cnt += 1
+
+#         Q = comp_pw_coal_cont(m, Ne_inv)
+#         P = expM(t[i] * Q)
+#         if verbose:
+#             print np.real(P0 * P)[0:-1, -1]
+#             print np.real(obs_rates[:, i])
+#             ist = raw_input('Waiting for input...')
+#         P0 = conv_scrambling_matrix(P0 * P)
+
+#     find_pop_merges.states_1 = None
+#     find_pop_merges.states_2 = None
+#     return (xopts, pdlist)
+
+# def comp_N_m_bfgs(obs_rates, t, merge_threshold, useMigration, initialize = False, logVal = True, verbose = False, window=0, hack=False, variances=[]):
+#     """This function estimates the N and m parameters for the various time slices. The 
+#     time slices are given in a vector form 't'. t specifies the length of the time slice, not
+#     the time from present to end of time slice (not cumulative but atomic)
+#     Also, the obs_rates are given, for each time slice are given in columns of the obs_rates
+#     matrix. Both obs_rates and time slice lengths are given from present to past.
+#     """
+#     FTOL = 10.0
+#     EPSILON = 1e-13
+#     RESTARTS = 40
+#     FLIMIT = 1e-15
+#     numslices = len(t)
+#     nr = np.shape(obs_rates)[0] + 1
+#     numdemes = int(np.real(np.sqrt(8 * nr - 7)) / 2)
+#     print 'Starting iterations'
+#     P0 = np.matrix(np.eye(nr))
+#     xopts = []
+#     pdlist = []
+# #    for i in range(numslices):
+#     i = 0
+#     if window == 1 and hack == True:
+#         rerunToMerge = True
+#     else:
+#         rerunToMerge = False
+#     while i < numslices:
+#         print 'Running for slice ', i
+#         if len(variances) != 0:
+#             curVar = variances[:,i]
+#         else:
+#             curVar = []
+# #        print curVar
+# #        al = raw_input('testing')
+#         if i > 0:
+#             x0 = bestxopt.copy()
+#             xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#              obs_rates[:, i], P0, make_merged_pd(pdlist), logVal, curVar), approx_grad=True, maxfun=100000, 
+#              factr=FTOL, epsilon=EPSILON, disp=0)
+#             bestxopt = xopt
+#             bestfval = fun
+#         else:
+#             bestxopt = None
+#             bestfval = 1e+200
+#         reestimate = True
+#         while reestimate:
+#             pdslice = make_merged_pd(pdlist)
+#             print 'restarting in slice', i, pdlist
+#             if initialize:
+#                 x0 = initStartingPoint(obs_rates[:, i], t[i], make_merged_pd(pdlist), P0)
+#             else:
+#                 N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#                 m0 = np.random.uniform(0.008, 0.001, numdemes * (numdemes - 1) / 2)
+#                 x0 = np.hstack((N0_inv, m0))
+#             lims = [(1e-10, 0.01)] * numdemes
+#             lims += [(0, 0.1)] * (numdemes * (numdemes - 1) / 2)
+#             try:
+#                 xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#                  obs_rates[:, i], P0, make_merged_pd(pdlist), logVal, curVar), approx_grad=True, maxfun=100000, 
+#                  factr=FTOL, epsilon=EPSILON, iprint=-1)
+#                 if fun < bestfval:
+#                     bestfval = fun
+#                     bestxopt = xopt
+#             except Exception as e:
+#                 print 'Error:', e.message
+
+#             N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#             m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+#             x0 = np.hstack((N0_inv, m0))
+#             nrestarts = 0
+#             try:
+#                 xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#                  obs_rates[:, i], P0, make_merged_pd(pdlist), logVal, curVar), approx_grad=True, maxfun=100000, 
+#                  factr=FTOL, epsilon=EPSILON, iprint=-1)
+#                 if fun < bestfval:
+#                     bestxopt = xopt
+#                     bestfval = fun
+#             except Exception as e:
+#                 print 'Error:', e.message
+
+#             while nrestarts < RESTARTS and bestfval > FLIMIT:
+#                 N0_inv = np.random.uniform(5e-05, 0.001, numdemes)
+#                 m0 = np.random.uniform(1e-08, 0.001, numdemes * (numdemes - 1) / 2)
+#                 x0 = np.hstack((N0_inv, m0))
+#                 try:
+#                     xopt, fun, dic = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0, bounds=lims, args=(t[i],
+#                      obs_rates[:, i], P0, make_merged_pd(pdlist), logVal, curVar), approx_grad=True, maxfun=100000, 
+#                      factr=FTOL, epsilon=EPSILON, iprint=-1)
+#                     if fun < bestfval:
+#                         bestfval = fun
+#                         bestxopt = xopt
+#                 except Exception as e:
+#                     print 'Error:', e.message
+#                 nrestarts += 1
+
+#             if verbose:
+#                 print 'Diagnostics:', bestfval, i, bestxopt[0:numdemes], bestxopt[numdemes:]
+#             Ne_inv = bestxopt[0:numdemes]
+#             mtemp = bestxopt[numdemes:]
+#             if rerunToMerge:
+#                 # This part of the code will rerun all the 2 pop merges and
+#                 # choose the one that does best. If none of them beat the 
+#                 # original, then do not merge.
+#                 print 'Rerun to merge - best function value', bestfval, pdlist
+#                 ndtemp = numdemes - 1
+#                 merge = False
+#                 newpopdict = []
+#                 for kk in xrange(numdemes):
+#                     newpopdict.append([])
+#                 newpopdict = construct_poparr(newpopdict)
+#                 curfuntemp = bestfval
+#                 limstemp = [(1e-10, 0.01)] * ndtemp
+#                 limstemp += [(0, 0.1)] * (ndtemp * (ndtemp - 1) / 2)
+#                 for p1 in range(numdemes):
+#                     for p2 in range(p1+1, numdemes):
+#                         podit = []
+#                         for kk in xrange(numdemes):
+#                             podit.append([])
+#                         podit[p1].append(p2)
+#                         podit[p2].append(p1)
+#                         pdtemp = construct_poparr(podit)
+#                         P0temp = converge_pops(pdtemp, P0)
+#                         pdlisttemp = list(pdlist)
+#                         pdlisttemp.append(pdtemp)
+#                         bestfuntemp = 1e200
+#                         for ll in xrange(5):
+#                             try:
+#                                 N0_invtemp = np.random.uniform(5e-05, 0.001, ndtemp)
+#                                 m0temp = np.random.uniform(0.008, 0.001, ndtemp * (ndtemp - 1) / 2)
+#                                 x0temp = np.hstack((N0_invtemp, m0temp))
+#                                 xopttemp, funtemp, dictemp = opt.fmin_l_bfgs_b(compute_Frob_norm_mig, x0temp, bounds=limstemp, 
+#                                                                            args=(t[i], obs_rates[:, i], P0temp, 
+#                                                                                  make_merged_pd(pdlisttemp), logVal, curVar), 
+#                                                                            approx_grad=True, maxfun=100000, factr=FTOL, 
+#                                                                            epsilon=EPSILON, iprint=-1)
+#                                 if (funtemp < bestfuntemp):
+#                                     bestfuntemp = funtemp
+# #                                    Ne_invt = xopttemp[0:ndtemp]
+# #                                    mtempt = xopttemp[ndtemp:]
+# #                                    mt = np.zeros((ndtemp, ndtemp))
+# #                                    cnt = 0
+# #                                    for ii in xrange(ndtemp):
+# #                                        for jj in xrange(ii + 1, ndtemp):
+# #                                            mt[ii, jj] = mt[jj, ii] = mtempt[cnt]
+# #                                            cnt += 1
+# #                                    Qtempt = comp_pw_coal_cont(mt, Ne_invt)
+# #                                    Ptempt = expM(t[i] * Qtempt)
+# #                                    print np.real(P0temp * Ptempt)[0:-1, -1]
+# #                                    print np.real(obs_rates[:, i])
+#                             except Exception as e:
+#                                 print 'Error:', e.message
+#                         print bestfuntemp 
+#                         if (bestfuntemp-4) < curfuntemp:
+#                             curfunctemp = bestfuntemp
+#                             newpopdict = pdtemp
+#                             print 'Merging', bestfuntemp, curfuntemp, bestfval
+#                 print 'Best func temp at rerun stage:', bestfuntemp
+#                 (state, popdict) = (None, newpopdict)
+#                 #ist = raw_input('123')
+#             else:
+#                 (state, popdict) = find_pop_merges(Ne_inv, mtemp, t[i], P0, merge_threshold, useMigration, window=window, hack=hack)
+#             print len(popdict)
+#             reestimate = False
+#             if len(popdict) < numdemes and window < 2:
+#                 print 'Merging populations and reestimating parameters:', popdict
+#                 Ne_inv = bestxopt[0:numdemes]
+#                 mtemp = bestxopt[numdemes:]
+#                 m = np.zeros((numdemes, numdemes))
+#                 cnt = 0
+#                 for ii in xrange(numdemes):
+#                     for jj in xrange(ii + 1, numdemes):
+#                         m[ii, jj] = m[jj, ii] = mtemp[cnt]
+#                         cnt += 1
+
+#                 Qtemp = comp_pw_coal_cont(m, Ne_inv)
+#                 Ptemp = expM(t[i] * Qtemp)
+#                 if verbose:
+#                     print np.real(P0 * Ptemp)[0:-1, -1]
+#                     print np.real(obs_rates[:, i])
+#                 print bestxopt
+#                 P0 = converge_pops(popdict, P0)
+#                 reestimate = True
+#                 pdlist.append(popdict)
+#                 numdemes = len(popdict)
+#                 nr = numdemes * (numdemes + 1) / 2 + 1
+#                 lims[:] = []
+#                 bestfval = 1e+200
+#                 bestxopt = None
+#             elif window > 1 and state != None and len(popdict) < numdemes:
+#                 #merger with the window back approach
+#                 del xopts[-2:] # remove the last 2 estimates
+#                 i = i - 2 # go back 2 timeslices
+#                 P0 = state[0]
+#                 P0 = converge_pops(popdict, P0)
+#                 reestimate = True
+#                 print popdict
+#                 print state[0]
+#                 print i
+#                 pdlist.append(popdict)
+#                 numdemes = len(popdict)
+#                 nr = numdemes*(numdemes+1)/2 + 1
+#                 lims[:] = []
+#                 bestfval=1e+200
+#                 bestxopt = None
+#             else:
+#                 modXopt = [ 1.0 / x for x in bestxopt[0:numdemes] ]
+#                 cnt = 0
+#                 for ii in xrange(numdemes):
+#                     for jj in xrange(ii + 1, numdemes):
+#                         modXopt.append(bestxopt[numdemes + cnt])
+#                         cnt = cnt + 1
+#                 xopts.append(np.array(modXopt))
+#                 Ne_inv = bestxopt[0:numdemes]
+#                 mtemp = np.abs(bestxopt[numdemes:])
+
+#         m = np.zeros((numdemes, numdemes))
+#         cnt = 0
+#         for ii in xrange(numdemes):
+#             for jj in xrange(ii + 1, numdemes):
+#                 if mtemp[cnt] > 0:
+#                     m[ii, jj] = m[jj, ii] = mtemp[cnt]
+#                 cnt += 1
+
+#         Q = comp_pw_coal_cont(m, Ne_inv)
+#         P = expM(t[i] * Q)
+#         if verbose:
+#             print 'After finishing slice', i
+#             print np.real(P0 * P)[0:-1, -1]
+#             print np.real(obs_rates[:, i])
+#         P0 = P0 * conv_scrambling_matrix(P)
+#         i += 1
+#     if hasattr(find_pop_merges, "states_1"):
+#         find_pop_merges.states_1 = None
+#         print 'resetting state 1'
+#     if hasattr(find_pop_merges, "states_2"):
+#         find_pop_merges.states_2 = None
+#         print 'resetting state 2'
+#     return (xopts, pdlist)
